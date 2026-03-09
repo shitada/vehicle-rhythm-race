@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="リズムレース">
+  <meta name="theme-color" content="#a8d8ea">
+  <title>のりものリズムレース</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" id="apple-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // iPad/iOS用にSVGからPNGアイコンを動的生成
+    (function() {
+      const img = new Image();
+      img.onload = function() {
+        const c = document.createElement('canvas');
+        c.width = 180; c.height = 180;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, 180, 180);
+        const link = document.getElementById('apple-icon');
+        if (link) link.href = c.toDataURL('image/png');
+      };
+      img.src = 'icon.svg';
+    })();
+  </script>
+</head>
+<body>
+
+  <!-- タイトル画面 -->
+  <div id="screen-title" class="screen active">
+    <div class="title-age">4さい 5さい むけ</div>
+    <h1 class="title-logo">のりもの<br>リズムレース</h1>
+    <p class="title-sub">おとに あわせて ジャンプ！<br>しょうがいぶつを のりこえよう</p>
+    <button id="btn-play" class="btn-play">あそぶ</button>
+    <div id="title-parade" class="title-parade"></div>
+    <div class="title-hint">👆 どこでも あそべる</div>
+  </div>
+
+  <!-- ゲーム画面 -->
+  <div id="screen-game" class="screen">
+    <div class="game-hud">
+      <div class="hud-left">
+        <button id="btn-home" class="btn-home">🏠</button>
+        <span id="stage-label" class="hud-item">ステージ 1 / 10</span>
+      </div>
+      <div class="hud-center">
+        <span id="vehicle-label" class="hud-item vehicle-label"></span>
+      </div>
+      <div class="hud-right">
+        <div id="combo-container" class="hud-item combo-container">
+          <span id="combo-count" class="combo-count">0</span> コンボ
+        </div>
+      </div>
+    </div>
+    <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+
+    <div id="game-field" class="game-field">
+      <div id="bg-far" class="bg-layer"></div>
+      <div id="bg-near" class="bg-layer"></div>
+      <div id="ground" class="ground"></div>
+      <div id="obstacle-layer" class="obstacle-layer"></div>
+      <div id="vehicle-container" class="vehicle-container">
+        <span id="game-vehicle">🚃</span>
+      </div>
+      <div id="judge-feedback" class="judge-feedback"></div>
+      <div id="tap-area" class="tap-area"></div>
+      <div id="ready-overlay" class="overlay ready-overlay">
+        <div id="ready-text" class="ready-text"></div>
+      </div>
+      <div id="goal-overlay" class="overlay goal-overlay">
+        <div id="goal-emoji" class="goal-emoji"></div>
+        <div id="goal-text" class="goal-text"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- リザルト画面 -->
+  <div id="screen-result" class="screen">
+    <div id="result-vehicle" class="result-vehicle"></div>
+    <div id="result-vehicle-name" class="result-vehicle-name"></div>
+    <div id="result-rank" class="result-rank"></div>
+
+    <div class="result-stats">
+      <div class="stat-item">
+        <div class="stat-label">🔥 さいだいコンボ</div>
+        <div id="result-combo" class="stat-value">0</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">📊 クリアりつ</div>
+        <div id="result-clear-rate" class="stat-value">0%</div>
+      </div>
+    </div>
+
+    <div class="result-detail">
+      <span>✨ <span id="result-perfect">0</span></span>
+      <span>👍 <span id="result-good">0</span></span>
+      <span>💦 <span id="result-miss">0</span></span>
+    </div>
+
+    <div class="result-buttons">
+      <button id="btn-next" class="btn-result btn-retry">▶️ つぎのステージ</button>
+      <button id="btn-retry" class="btn-result btn-to-select">🔄 もういちど</button>
+    </div>
+  </div>
+
+  <script src="courses.js"></script>
+  <script src="melody-generator.js"></script>
+  <script src="audio.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
