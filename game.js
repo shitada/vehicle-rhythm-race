@@ -1,4 +1,4 @@
-// game.js — ゲームエンジン本体（ステージ制・10ステージ）
+// game.js — ゲームエンジン本体（PixiJS版・10ステージ）
 
 const Game = {
   // 状態
@@ -26,9 +26,15 @@ const Game = {
   roundDuration: 0,
   roundProgress: 0,
   stageParams: null,
+  shakeEndTime: 0,
 
   // 進捗
   bestStage: 0,
+
+  // PixiJS
+  app: null,
+  pixi: {},
+  vehicleSprite: null,
 
   // DOM要素キャッシュ
   els: {},
@@ -40,14 +46,56 @@ const Game = {
   VEHICLE_HITBOX_W: 20,
   OBSTACLE_HITBOX_W: 15,
   OBSTACLE_HITBOX_H: 40,
-  BIG_OBSTACLE_HITBOX_H: 70, // px 大障害物の当たり判定高さ（110のジャンプで余裕あり）
+  BIG_OBSTACLE_HITBOX_H: 70,
 
   init() {
     this.cacheElements();
+    this.initPixi();
     this.loadProgress();
     this.bindEvents();
     this.showScreen('title');
     this.animateTitle();
+  },
+
+  initPixi() {
+    const gameField = this.els.game.gameField;
+    this.app = new PIXI.Application({
+      resizeTo: gameField,
+      backgroundAlpha: 0,
+      antialias: true,
+      resolution: window.devicePixelRatio || 1,
+      autoDensity: true,
+    });
+
+    const view = this.app.view;
+    view.style.position = 'absolute';
+    view.style.top = '0';
+    view.style.left = '0';
+    view.style.width = '100%';
+    view.style.height = '100%';
+    view.style.pointerEvents = 'none';
+    view.style.zIndex = '1';
+    gameField.insertBefore(view, gameField.firstChild);
+
+    // レイヤー（z順）
+    this.pixi.bgFar = new PIXI.Container();
+    this.pixi.bgNear = new PIXI.Container();
+    this.pixi.ground = new PIXI.Graphics();
+    this.pixi.obstacleLayer = new PIXI.Container();
+    this.pixi.vehicleContainer = new PIXI.Container();
+    this.pixi.particleLayer = new PIXI.Container();
+
+    this.app.stage.addChild(this.pixi.bgFar);
+    this.app.stage.addChild(this.pixi.bgNear);
+    this.app.stage.addChild(this.pixi.ground);
+    this.app.stage.addChild(this.pixi.obstacleLayer);
+    this.app.stage.addChild(this.pixi.vehicleContainer);
+    this.app.stage.addChild(this.pixi.particleLayer);
+
+    // 乗り物スプライト
+    this.vehicleSprite = new PIXI.Text('\u{1F683}', { fontSize: 48 });
+    this.vehicleSprite.anchor.set(0.5, 1);
+    this.pixi.vehicleContainer.addChild(this.vehicleSprite);
   },
 
   cacheElements() {
@@ -62,12 +110,7 @@ const Game = {
         parade: document.getElementById('title-parade'),
       },
       game: {
-        vehicleEmoji: document.getElementById('game-vehicle'),
-        vehicleContainer: document.getElementById('vehicle-container'),
-        obstacleLayer: document.getElementById('obstacle-layer'),
-        bgFar: document.getElementById('bg-far'),
-        bgNear: document.getElementById('bg-near'),
-        ground: document.getElementById('ground'),
+        gameField: document.getElementById('game-field'),
         stageLabel: document.getElementById('stage-label'),
         vehicleLabel: document.getElementById('vehicle-label'),
         comboCount: document.getElementById('combo-count'),
@@ -76,7 +119,6 @@ const Game = {
         judgeFeedback: document.getElementById('judge-feedback'),
         tapArea: document.getElementById('tap-area'),
         homeBtn: document.getElementById('btn-home'),
-        gameField: document.getElementById('game-field'),
         readyOverlay: document.getElementById('ready-overlay'),
         readyText: document.getElementById('ready-text'),
         goalOverlay: document.getElementById('goal-overlay'),
@@ -109,7 +151,7 @@ const Game = {
       this.startFromStage(1);
     });
 
-    // タイトルBGM（どのインタラクションでも即座に開始）
+    // タイトルBGM
     const startTitleBGM = () => {
       AudioEngine.init();
       AudioEngine.resume();
@@ -234,11 +276,16 @@ const Game = {
     const isDark = vehicle.id === 'police' || vehicle.id === 'racecar';
     document.body.style.background = `linear-gradient(180deg, ${vehicle.bgColor1} 0%, ${vehicle.bgColor2} 100%)`;
 
-    this.els.game.vehicleEmoji.textContent = vehicle.emoji;
-    this.els.game.vehicleEmoji.style.display = 'inline-block';
-    this.els.game.vehicleEmoji.style.transform = vehicle.flipX ? 'scaleX(-1)' : 'none';
-    this.els.game.ground.style.backgroundColor = vehicle.groundColor;
+    // 乗り物スプライト更新
+    const vSize = this._responsiveSize(40, 0.08, 64);
+    this.vehicleSprite.text = vehicle.emoji;
+    this.vehicleSprite.style.fontSize = vSize;
+    this.vehicleSprite.scale.x = vehicle.flipX ? -1 : 1;
 
+    // 地面
+    this._drawGround(vehicle.groundColor);
+
+    // 背景絵文字
     this.setupBackgroundEmojis(vehicle);
 
     const gameScreen = this.els.screens.game;
@@ -249,32 +296,55 @@ const Game = {
     }
   },
 
-  setupBackgroundEmojis(vehicle) {
-    const bgFar = this.els.game.bgFar;
-    const bgNear = this.els.game.bgNear;
-    bgFar.innerHTML = '';
-    bgNear.innerHTML = '';
+  _drawGround(cssColor) {
+    const g = this.pixi.ground;
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    g.clear();
+    g.beginFill(this._cssToHex(cssColor));
+    g.drawRect(0, h * 0.75, w, h * 0.25);
+    g.endFill();
+  },
 
+  _cssToHex(color) {
+    return parseInt(color.replace('#', ''), 16);
+  },
+
+  _responsiveSize(min, ratio, max) {
+    const w = this.app ? this.app.screen.width : window.innerWidth;
+    return Math.min(max, Math.max(min, w * ratio));
+  },
+
+  setupBackgroundEmojis(vehicle) {
+    this.pixi.bgFar.removeChildren().forEach(c => c.destroy());
+    this.pixi.bgNear.removeChildren().forEach(c => c.destroy());
+
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    const totalW = w * 2;
+
+    // 遠景レイヤー
     for (let i = 0; i < 8; i++) {
-      const span = document.createElement('span');
-      span.className = 'bg-emoji far';
-      span.textContent = vehicle.bgEmojis[i % vehicle.bgEmojis.length];
-      span.style.left = `${i * 13 + Math.random() * 5}%`;
-      span.style.bottom = `${10 + Math.random() * 30}%`;
-      span.style.fontSize = `${1.2 + Math.random() * 0.8}rem`;
-      span.style.opacity = '0.4';
-      bgFar.appendChild(span);
+      const emoji = vehicle.bgEmojis[i % vehicle.bgEmojis.length];
+      const size = 19 + Math.random() * 13;
+      const text = new PIXI.Text(emoji, { fontSize: size });
+      text.anchor.set(0.5, 1);
+      text.x = (i * 0.13 + Math.random() * 0.05) * totalW;
+      text.y = h * (0.6 + Math.random() * 0.1);
+      text.alpha = 0.4;
+      this.pixi.bgFar.addChild(text);
     }
 
+    // 近景レイヤー
     for (let i = 0; i < 5; i++) {
-      const span = document.createElement('span');
-      span.className = 'bg-emoji near';
-      span.textContent = vehicle.bgEmojis[i % vehicle.bgEmojis.length];
-      span.style.left = `${i * 20 + Math.random() * 10}%`;
-      span.style.bottom = `${25 + Math.random() * 15}%`;
-      span.style.fontSize = `${1.8 + Math.random() * 1}rem`;
-      span.style.opacity = '0.25';
-      bgNear.appendChild(span);
+      const emoji = vehicle.bgEmojis[i % vehicle.bgEmojis.length];
+      const size = 29 + Math.random() * 16;
+      const text = new PIXI.Text(emoji, { fontSize: size });
+      text.anchor.set(0.5, 1);
+      text.x = (i * 0.2 + Math.random() * 0.1) * totalW;
+      text.y = h * (0.55 + Math.random() * 0.1);
+      text.alpha = 0.25;
+      this.pixi.bgNear.addChild(text);
     }
   },
 
@@ -289,7 +359,7 @@ const Game = {
     this.roundProgress = 0;
 
     // UI更新
-    this.els.game.stageLabel.textContent = `ステージ ${this.stage} / ${COURSES.TOTAL_STAGES}`;
+    this.els.game.stageLabel.textContent = `\u30b9\u30c6\u30fc\u30b8 ${this.stage} / ${COURSES.TOTAL_STAGES}`;
     this.els.game.vehicleLabel.textContent = `${this.vehicle.emoji} ${this.vehicle.name}`;
     this.updateHUD();
     this.clearObstacleLayer();
@@ -302,11 +372,11 @@ const Game = {
     const text = this.els.game.readyText;
 
     overlay.classList.add('show');
-    this._setReadyText(text, `ステージ ${this.stage}`);
+    this._setReadyText(text, `\u30b9\u30c6\u30fc\u30b8 ${this.stage}`);
 
     const steps = [
       [700, `${this.vehicle.emoji} ${this.vehicle.name}`],
-      [1400, 'さあ いくよ！'],
+      [1400, '\u3055\u3042 \u3044\u304f\u3088\uff01'],
       [2000, '3'],
       [2300, '2'],
       [2600, '1'],
@@ -342,7 +412,7 @@ const Game = {
   // === 障害物生成 ===
 
   spawnAllObstacles() {
-    const fieldWidth = this.els.game.gameField.offsetWidth;
+    const fieldWidth = this.app.screen.width;
     this.obstacles = [];
 
     this.sequence.forEach((note, idx) => {
@@ -356,7 +426,7 @@ const Game = {
         note: note.note,
         waveType: this.vehicle.waveType,
         duration: note.duration,
-        el: null,
+        sprite: null,
         idx: idx,
       });
     });
@@ -369,9 +439,11 @@ const Game = {
 
     const now = AudioEngine.getCurrentTime();
     const elapsed = now - this.gameStartTime;
-    const fieldWidth = this.els.game.gameField.offsetWidth;
+    const fieldWidth = this.app.screen.width;
+    const fieldHeight = this.app.screen.height;
     const vehicleX = fieldWidth * this.VEHICLE_X_RATIO;
     const approachTime = this.stageParams.approachTime;
+    const groundY = fieldHeight * 0.75;
 
     // ノリノリ速度倍率
     const speedMult = this.norinoriLevel === 2 ? 1.3 : this.norinoriLevel === 1 ? 1.15 : 1.0;
@@ -385,68 +457,63 @@ const Game = {
     const scrollOffset = elapsed * scrollSpeed * speedMult;
     const bgFarOffset = (scrollOffset * 0.3) % (fieldWidth * 2);
     const bgNearOffset = (scrollOffset * 0.6) % (fieldWidth * 2);
-    this.els.game.bgFar.style.transform = `translateX(${-bgFarOffset}px)`;
-    this.els.game.bgNear.style.transform = `translateX(${-bgNearOffset}px)`;
-    this.els.game.ground.style.backgroundPosition = `${-scrollOffset}px 0`;
+    this.pixi.bgFar.x = -bgFarOffset;
+    this.pixi.bgNear.x = -bgNearOffset;
 
     // 障害物位置更新
     this.obstacles.forEach(obs => {
       const timeUntilHit = obs.time - elapsed;
       obs.x = vehicleX + (timeUntilHit / approachTime) * (fieldWidth - vehicleX);
 
-      if (!obs.el) {
-        obs.el = this.createObstacleElement(obs);
-        this.els.game.obstacleLayer.appendChild(obs.el);
+      // スプライト未作成なら作成
+      if (!obs.sprite) {
+        obs.sprite = this._createObstacleSprite(obs);
       }
 
-      obs.el.style.transform = `translateX(${obs.x}px)`;
+      obs.sprite.container.x = obs.x;
+      obs.sprite.container.y = groundY;
 
       if (obs.judged && obs.cleared) {
-        obs.el.style.opacity = '0.35';
+        obs.sprite.container.alpha = 0.35;
       } else if (obs.judged && !obs.cleared) {
-        obs.el.style.opacity = '0.5';
+        obs.sprite.container.alpha = 0.5;
       }
 
-      // 光るリング効果
+      // リング効果
       const proximity = 1 - Math.min(1, Math.abs(timeUntilHit) / approachTime);
-      const ring = obs.el.querySelector('.obs-ring');
-      if (ring) {
-        ring.style.opacity = obs.judged ? 0 : proximity * 0.8;
-        ring.style.transform = `scale(${1 + proximity * 0.3})`;
+      obs.sprite.ring.alpha = obs.judged ? 0 : proximity * 0.8;
+      obs.sprite.ring.scale.set(1 + proximity * 0.3);
+
+      // 大障害物パルス
+      if (obs.big && !obs.judged) {
+        const pulse = 1 + 0.1 * Math.sin(performance.now() * 0.008 * Math.PI);
+        obs.sprite.text.scale.set(pulse);
       }
 
-      // 位置ベース当たり判定（障害物が乗り物の真横に来た時のみ）
+      // 位置ベース当たり判定
       if (!obs.judged) {
-        // 障害物が乗り物を通過中かどうか（狭い判定幅）
         const dx = obs.x - vehicleX;
-        const hitboxRange = 10; // px — 非常に狭い判定幅
+        const hitboxRange = 10;
 
-        // 障害物が判定ゾーンに入った
         if (Math.abs(dx) < hitboxRange) {
           const vehicleY = this.getCurrentJumpHeight();
           const hitH = obs.big ? this.BIG_OBSTACLE_HITBOX_H : this.OBSTACLE_HITBOX_H;
 
-          // ジャンプのフェーズ判定
           const jumpElapsed = performance.now() - this.jumpStartTime;
           const jumpT = this.isJumping ? jumpElapsed / this.JUMP_DURATION : 1;
-          // 下降中（ピークの60%以降）は判定が厳しい
           const isDescending = this.isJumping && jumpT > 0.5;
-          // 着地直前（80%以降）はほぼミス確定
           const isLanding = this.isJumping && jumpT > 0.75;
 
           if (!this.isJumping || isLanding) {
-            // 地上または着地直前→ミス
             this.judgeNote(obs, 'miss');
           } else if (vehicleY > hitH) {
             if (obs.big) {
-              // 大障害物: 下降中でも高さがあればgood、上昇中はperfect可能
               if (isDescending) {
                 this.judgeNote(obs, 'good');
               } else {
                 this.judgeNote(obs, vehicleY > this.JUMP_HEIGHT * 0.7 ? 'perfect' : 'good');
               }
             } else {
-              // 通常障害物: 従来通り
               if (isDescending) {
                 this.judgeNote(obs, 'good');
               } else {
@@ -458,15 +525,17 @@ const Game = {
           }
         }
 
-        // 障害物が完全に通り過ぎた場合もミス
         if (!obs.judged && dx < -hitboxRange) {
           this.judgeNote(obs, 'miss');
         }
       }
     });
 
-    // ジャンプアニメーション
-    this.updateJumpAnimation();
+    // 乗り物位置更新
+    this._updateVehiclePosition(vehicleX, groundY);
+
+    // パーティクル更新
+    this._updateParticles();
 
     // ステージ終了チェック
     if (elapsed >= this.roundDuration) {
@@ -477,20 +546,43 @@ const Game = {
     this.animFrame = requestAnimationFrame(() => this.gameLoop());
   },
 
-  // === 要素生成 ===
+  // === 障害物スプライト生成 ===
 
-  createObstacleElement(obs) {
-    const el = document.createElement('div');
-    el.className = obs.big ? 'obstacle big' : 'obstacle normal';
-    el.innerHTML = `
-      <div class="obs-ring"></div>
-      <span class="obs-emoji">${this.vehicle.obstacle}</span>
-    `;
-    return el;
+  _createObstacleSprite(obs) {
+    const container = new PIXI.Container();
+    const size = obs.big
+      ? this._responsiveSize(45, 0.09, 64)
+      : this._responsiveSize(29, 0.06, 40);
+
+    const text = new PIXI.Text(this.vehicle.obstacle, { fontSize: size });
+    text.anchor.set(0.5, 1);
+
+    // リング
+    const ring = new PIXI.Graphics();
+    ring.lineStyle(3, 0xFFD700, 0.7);
+    ring.drawCircle(0, -size * 0.5, size * 0.6);
+    ring.alpha = 0;
+
+    container.addChild(ring);
+    container.addChild(text);
+
+    // 大障害物グロー
+    if (obs.big) {
+      const glow = new PIXI.Graphics();
+      glow.beginFill(0xFF3232, 0.15);
+      glow.drawCircle(0, -size * 0.5, size * 0.8);
+      glow.endFill();
+      container.addChildAt(glow, 0);
+    }
+
+    this.pixi.obstacleLayer.addChild(container);
+    return { container, text, ring };
   },
 
   clearObstacleLayer() {
-    this.els.game.obstacleLayer.innerHTML = '';
+    this.pixi.obstacleLayer.removeChildren().forEach(c => c.destroy({ children: true }));
+    this.pixi.particleLayer.removeChildren().forEach(c => c.destroy());
+    this.particles = [];
   },
 
   // === タップ処理 ===
@@ -503,7 +595,6 @@ const Game = {
     this.isJumping = true;
     this.jumpStartTime = performance.now();
     AudioEngine.playJumpSound();
-    this.els.game.vehicleContainer.classList.add('jumping');
   },
 
   getCurrentJumpHeight() {
@@ -524,6 +615,43 @@ const Game = {
     return height * this.JUMP_HEIGHT;
   },
 
+  // === 乗り物位置更新 ===
+
+  _updateVehiclePosition(vehicleX, groundY) {
+    let height = 0;
+    let scaleX = 1;
+    let scaleY = 1;
+
+    if (this.isJumping) {
+      const jumpElapsed = performance.now() - this.jumpStartTime;
+      if (jumpElapsed >= this.JUMP_DURATION) {
+        this.isJumping = false;
+      } else {
+        height = this.getCurrentJumpHeight();
+        const t = jumpElapsed / this.JUMP_DURATION;
+        if (t < 0.08) {
+          scaleX = 1.08; scaleY = 0.92;
+        } else if (t < 0.2) {
+          scaleX = 0.95; scaleY = 1.05;
+        } else if (t > 0.88) {
+          scaleX = 1.06; scaleY = 0.94;
+        }
+      }
+    }
+
+    // シェイク
+    let shakeX = 0;
+    if (performance.now() < this.shakeEndTime) {
+      const remain = (this.shakeEndTime - performance.now()) / 300;
+      shakeX = Math.sin(performance.now() * 0.03) * 5 * remain;
+    }
+
+    const flip = this.vehicle && this.vehicle.flipX ? -1 : 1;
+    this.vehicleSprite.x = vehicleX + shakeX;
+    this.vehicleSprite.y = groundY - height;
+    this.vehicleSprite.scale.set(flip * scaleX, scaleY);
+  },
+
   // === 判定処理 ===
 
   judgeNote(obs, result) {
@@ -537,20 +665,19 @@ const Game = {
       AudioEngine.playNote(obs.freq, obs.waveType, obs.duration, undefined);
 
       if (this.combo >= 3) {
-        this.showJudgeFeedback(`🔥 ${this.combo}つれんぞく！`, 'combo');
+        this.showJudgeFeedback(`\u{1F525} ${this.combo}\u3064\u308c\u3093\u305e\u304f\uff01`, 'combo');
       } else {
-        this.showJudgeFeedback('✨ ナイス！', 'good');
+        this.showJudgeFeedback('\u2728 \u30ca\u30a4\u30b9\uff01', 'good');
       }
-      this.spawnParticle(obs.x, '✨');
+      this.spawnParticle(obs.x, '\u2728');
     } else {
       obs.cleared = false;
       this.missCount++;
       this.combo = 0;
       this.norinoriLevel = 0;
       AudioEngine.playMissSound();
-      this.showJudgeFeedback('💦 おしい...', 'miss');
-      this.els.game.vehicleContainer.classList.add('shake');
-      setTimeout(() => this.els.game.vehicleContainer.classList.remove('shake'), 300);
+      this.showJudgeFeedback('\u{1F4A6} \u304a\u3057\u3044...', 'miss');
+      this.shakeEndTime = performance.now() + 300;
     }
 
     if (this.combo > this.maxCombo) this.maxCombo = this.combo;
@@ -584,42 +711,37 @@ const Game = {
     }, 600);
   },
 
-  // === ジャンプアニメーション ===
-
-  updateJumpAnimation() {
-    if (!this.isJumping) return;
-
-    const jumpElapsed = performance.now() - this.jumpStartTime;
-
-    if (jumpElapsed >= this.JUMP_DURATION) {
-      this.isJumping = false;
-      this.els.game.vehicleContainer.classList.remove('jumping');
-      this.els.game.vehicleContainer.style.transform = `translateX(-50%) translateY(0)`;
-    } else {
-      const height = this.getCurrentJumpHeight();
-      const t = jumpElapsed / this.JUMP_DURATION;
-      let scaleX = 1, scaleY = 1;
-      if (t < 0.08) {
-        scaleX = 1.08; scaleY = 0.92;
-      } else if (t < 0.2) {
-        scaleX = 0.95; scaleY = 1.05;
-      } else if (t > 0.88) {
-        scaleX = 1.06; scaleY = 0.94;
-      }
-      this.els.game.vehicleContainer.style.transform = `translateX(-50%) translateY(${-height}px) scaleX(${scaleX}) scaleY(${scaleY})`;
-    }
-  },
-
   // === パーティクル ===
 
   spawnParticle(x, emoji) {
-    const el = document.createElement('div');
-    el.className = 'particle';
-    el.textContent = emoji;
-    el.style.left = `${x}px`;
-    el.style.bottom = '120px';
-    this.els.game.obstacleLayer.appendChild(el);
-    setTimeout(() => el.remove(), 800);
+    const h = this.app.screen.height;
+    const text = new PIXI.Text(emoji, { fontSize: 24 });
+    text.anchor.set(0.5, 0.5);
+    text.x = x;
+    text.y = h * 0.75 - 60;
+    this.pixi.particleLayer.addChild(text);
+
+    this.particles.push({
+      sprite: text,
+      startTime: performance.now(),
+      startY: text.y,
+    });
+  },
+
+  _updateParticles() {
+    const now = performance.now();
+    this.particles = this.particles.filter(p => {
+      const t = (now - p.startTime) / 800;
+      if (t >= 1) {
+        this.pixi.particleLayer.removeChild(p.sprite);
+        p.sprite.destroy();
+        return false;
+      }
+      p.sprite.y = p.startY - 80 * t;
+      p.sprite.scale.set(1 - 0.7 * t);
+      p.sprite.alpha = 1 - t;
+      return true;
+    });
   },
 
   // === HUD更新 ===
@@ -666,16 +788,16 @@ const Game = {
 
   showAllClearEffect(callback) {
     const overlay = this.els.game.goalOverlay;
-    this.els.game.goalEmoji.textContent = '🌟';
-    this.els.game.goalText.textContent = 'パーフェクト！';
+    this.els.game.goalEmoji.textContent = '\u{1F31F}';
+    this.els.game.goalText.textContent = '\u30d1\u30fc\u30d5\u30a7\u30af\u30c8\uff01';
     this.els.game.goalText.className = 'goal-text perfect-flash';
     overlay.classList.add('show');
     AudioEngine.playPerfectSound();
 
     for (let i = 0; i < 8; i++) {
       setTimeout(() => {
-        const x = Math.random() * (this.els.game.gameField.offsetWidth);
-        this.spawnParticle(x, ['✨', '🌟', '🎉', '✨'][i % 4]);
+        const x = Math.random() * this.app.screen.width;
+        this.spawnParticle(x, ['\u2728', '\u{1F31F}', '\u{1F389}', '\u2728'][i % 4]);
       }, i * 100);
     }
 
@@ -693,7 +815,6 @@ const Game = {
     this.clearObstacleLayer();
     this.els.game.gameField.classList.remove('norinori-1', 'norinori-2');
 
-    // 進捗保存
     if (this.stage > this.bestStage) {
       this.bestStage = this.stage;
       this.saveProgress();
@@ -703,7 +824,7 @@ const Game = {
     const clearRate = total > 0 ? Math.round(((this.perfectCount + this.goodCount) / total) * 100) : 0;
 
     this.els.result.vehicleEmoji.textContent = this.vehicle.emoji;
-    this.els.result.vehicleName.textContent = `ステージ ${this.stage} — ${this.vehicle.name}`;
+    this.els.result.vehicleName.textContent = `\u30b9\u30c6\u30fc\u30b8 ${this.stage} \u2014 ${this.vehicle.name}`;
     this.els.result.maxCombo.textContent = this.maxCombo;
     this.els.result.clearRate.textContent = `${clearRate}%`;
     this.els.result.perfectNum.textContent = this.perfectCount;
@@ -711,23 +832,22 @@ const Game = {
     this.els.result.missNum.textContent = this.missCount;
 
     if (this.missCount === 0) {
-      this.els.result.rank.textContent = '🌟 パーフェクト！';
+      this.els.result.rank.textContent = '\u{1F31F} \u30d1\u30fc\u30d5\u30a7\u30af\u30c8\uff01';
       this.els.result.rank.className = 'result-rank rank-perfect';
     } else if (clearRate >= 70) {
-      this.els.result.rank.textContent = '🎉 すごい！';
+      this.els.result.rank.textContent = '\u{1F389} \u3059\u3054\u3044\uff01';
       this.els.result.rank.className = 'result-rank rank-great';
     } else {
-      this.els.result.rank.textContent = '😊 がんばったね！';
+      this.els.result.rank.textContent = '\u{1F60A} \u304c\u3093\u3070\u3063\u305f\u306d\uff01';
       this.els.result.rank.className = 'result-rank rank-good';
     }
 
-    // 次のステージボタン
     if (this.stage < COURSES.TOTAL_STAGES) {
       const nextVehicle = COURSES.getStageVehicle(this.stage + 1);
-      this.els.result.nextBtn.textContent = `▶️ つぎ: ${nextVehicle.emoji} ${nextVehicle.name}`;
+      this.els.result.nextBtn.textContent = `\u25b6\ufe0f \u3064\u304e: ${nextVehicle.emoji} ${nextVehicle.name}`;
       this.els.result.nextBtn.style.display = '';
     } else {
-      this.els.result.nextBtn.textContent = '🏠 おわり';
+      this.els.result.nextBtn.textContent = '\u{1F3E0} \u304a\u308f\u308a';
       this.els.result.nextBtn.style.display = '';
     }
 
